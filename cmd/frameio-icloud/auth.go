@@ -1,9 +1,3 @@
-// frameio-auth performs the one-time interactive OAuth 2.0 authorization-code
-// flow with Adobe IMS to obtain the initial access + refresh tokens for a
-// Frame.io V4 account. After a successful login in the browser, it writes
-// the tokens to a JSON file the relay reads.
-//
-// Run once per account. Re-run if the refresh token is ever invalidated.
 package main
 
 import (
@@ -25,36 +19,48 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zackpollard/frameio-immich-relay/internal/frameio"
+	"github.com/nutgood/frameio-icloud/internal/config"
+	"github.com/nutgood/frameio-icloud/internal/frameio"
+	"github.com/nutgood/frameio-icloud/internal/paths"
 )
 
-func main() {
-	tokensPath := flag.String("tokens", "tokens.json", "file to write the access + refresh tokens to")
-	clientID := flag.String("client-id", os.Getenv("FRAMEIO_CLIENT_ID"), "OAuth client ID from Adobe Developer Console")
-	clientSecret := flag.String("client-secret", os.Getenv("FRAMEIO_CLIENT_SECRET"), "OAuth client secret from Adobe Developer Console")
-	port := flag.Int("port", 12345, "local port for the OAuth redirect listener")
-	scopes := flag.String("scopes", "openid email profile offline_access additional_info.roles", "space-separated OAuth scopes to request")
-	discoverOnly := flag.Bool("discover", false, "skip OAuth, use existing tokens.json, just print the Frame.io account / workspace / project hierarchy")
-	flag.Parse()
+// runAuth handles two modes:
+//   - default: interactive OAuth via Adobe IMS. Spins up a localhost HTTPS
+//     listener on :12345, prints the authorize URL, captures the redirect,
+//     exchanges the code, writes tokens.json. Also prints the Frame.io
+//     hierarchy at the end so the user knows what to put in config.
+//   - -discover: skip OAuth, just print the hierarchy using existing
+//     tokens.json. For when you add a new project later.
+func runAuth(args []string) {
+	fs := flag.NewFlagSet("auth", flag.ExitOnError)
+	clientID := fs.String("client-id", os.Getenv("FRAMEIO_CLIENT_ID"), "OAuth client ID from Adobe Developer Console")
+	clientSecret := fs.String("client-secret", os.Getenv("FRAMEIO_CLIENT_SECRET"), "OAuth client secret from Adobe Developer Console")
+	port := fs.Int("port", 12345, "local port for the OAuth redirect listener")
+	scopes := fs.String("scopes", "openid email profile offline_access additional_info.roles", "OAuth scopes")
+	discoverOnly := fs.Bool("discover", false, "skip OAuth; just print Frame.io accounts/workspaces/projects")
+	apply := fs.Bool("apply", false, "with -discover and exactly one account/workspace/project, write the IDs into config.json")
+	_ = fs.Parse(args)
 
-	if *discoverOnly {
-		runDiscover(*tokensPath)
-		return
+	p, err := paths.Default()
+	if err != nil {
+		log.Fatalf("paths: %v", err)
+	}
+	if err := p.EnsureDirs(); err != nil {
+		log.Fatalf("ensure dirs: %v", err)
 	}
 
+	if *discoverOnly {
+		runDiscover(p, *apply)
+		return
+	}
 	if *clientID == "" || *clientSecret == "" {
 		log.Fatal("-client-id and -client-secret (or FRAMEIO_CLIENT_ID / FRAMEIO_CLIENT_SECRET) required")
 	}
 
-	// Adobe Developer Console requires HTTPS for redirect URIs even on
-	// loopback and rejects raw IPs, so we use "localhost" and serve TLS
-	// with a self-signed cert for it. Browser will warn on first visit;
-	// accept the risk to proceed (cert is regenerated every run).
 	redirectURI := fmt.Sprintf("https://localhost:%d/callback", *port)
-
-	store, err := frameio.LoadTokenStore(*tokensPath)
+	store, err := frameio.LoadTokenStore(p.Tokens)
 	if err != nil {
-		log.Fatalf("load %s: %v", *tokensPath, err)
+		log.Fatalf("load %s: %v", p.Tokens, err)
 	}
 	store.ClientID = *clientID
 	store.ClientSecret = *clientSecret
@@ -68,7 +74,6 @@ func main() {
 	state := hex.EncodeToString(stateBytes)
 
 	authURL := store.AuthorizeURL(state, strings.Fields(*scopes))
-
 	fmt.Println("--------------------------------------------------------------------------------")
 	fmt.Println("Open the following URL in your browser and grant access:")
 	fmt.Println()
@@ -86,13 +91,13 @@ func main() {
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if e := q.Get("error"); e != "" {
-			flowErr = fmt.Errorf("oauth error: %s: %s", e, q.Get("error_description"))
+			flowErr = fmt.Errorf("oauth: %s: %s", e, q.Get("error_description"))
 			http.Error(w, flowErr.Error(), http.StatusBadRequest)
 			close(done)
 			return
 		}
 		if q.Get("state") != state {
-			flowErr = fmt.Errorf("oauth: state mismatch (got %q)", q.Get("state"))
+			flowErr = fmt.Errorf("oauth: state mismatch")
 			http.Error(w, flowErr.Error(), http.StatusBadRequest)
 			close(done)
 			return
@@ -131,57 +136,38 @@ func main() {
 			log.Fatalf("listen: %v", err)
 		}
 	}()
-
 	<-done
 	_ = srv.Close()
-
 	if flowErr != nil {
 		log.Fatalf("auth failed: %v", flowErr)
 	}
-	log.Printf("tokens written to %s (access token expires at %s UTC)", *tokensPath, store.ExpiresAt.UTC().Format(time.RFC3339))
-
+	log.Printf("tokens written to %s (access token expires %s UTC)", p.Tokens, store.ExpiresAt.UTC().Format(time.RFC3339))
 	fmt.Println()
-	if err := printHierarchy(context.Background(), store); err != nil {
-		log.Printf("(could not discover accounts/workspaces/projects: %v)", err)
-	}
+	runDiscover(p, *apply)
 }
 
-// runDiscover loads an existing tokens.json, refreshes the access token if
-// needed, and prints the Frame.io hierarchy. Intended for re-running the
-// discovery step later (e.g. after a new project is added) without redoing
-// the interactive OAuth flow.
-func runDiscover(tokensPath string) {
-	store, err := frameio.LoadTokenStore(tokensPath)
+func runDiscover(p *paths.Paths, apply bool) {
+	store, err := frameio.LoadTokenStore(p.Tokens)
 	if err != nil {
-		log.Fatalf("load %s: %v", tokensPath, err)
+		log.Fatalf("load %s: %v", p.Tokens, err)
 	}
 	if store.RefreshToken == "" {
-		log.Fatalf("tokens file %s is empty — run without -discover first to authenticate", tokensPath)
+		log.Fatalf("tokens file %s is empty — run `frameio-icloud auth` first (without -discover)", p.Tokens)
 	}
-	if err := printHierarchy(context.Background(), store); err != nil {
-		log.Fatalf("discover: %v", err)
-	}
-}
-
-func printHierarchy(ctx context.Context, store *frameio.TokenStore) error {
-	// AccountID is not needed for /accounts or any of the discovery calls;
-	// passing "" is safe.
 	client := frameio.NewClient(store, "")
+	ctx := context.Background()
 	accounts, err := client.ListAccounts(ctx)
 	if err != nil {
-		return fmt.Errorf("list accounts: %w", err)
+		log.Fatalf("list accounts: %v", err)
 	}
 	if len(accounts) == 0 {
 		fmt.Println("No Frame.io accounts found for this user.")
-		return nil
+		return
 	}
-
 	fmt.Println("Discovered Frame.io hierarchy:")
 	fmt.Println()
-
 	type triple struct{ account, workspace, folder string }
-	var single *triple // populated iff exactly one account/workspace/project
-
+	var single *triple
 	for _, a := range accounts {
 		fmt.Printf("  Account: %s\n    id: %s\n", a.DisplayName, a.ID)
 		workspaces, err := client.ListWorkspaces(ctx, a.ID)
@@ -196,35 +182,46 @@ func printHierarchy(ctx context.Context, store *frameio.TokenStore) error {
 				fmt.Printf("      (list projects failed: %v)\n", err)
 				continue
 			}
-			for _, p := range projects {
-				fmt.Printf("      Project: %s\n        id: %s\n        root_folder_id: %s\n", p.Name, p.ID, p.RootFolderID)
+			for _, prj := range projects {
+				fmt.Printf("      Project: %s\n        id: %s\n        root_folder_id: %s\n", prj.Name, prj.ID, prj.RootFolderID)
 				if len(accounts) == 1 && len(workspaces) == 1 && len(projects) == 1 {
-					single = &triple{a.ID, w.ID, p.RootFolderID}
+					single = &triple{a.ID, w.ID, prj.RootFolderID}
 				}
 			}
 		}
 	}
-
 	fmt.Println()
-	if single != nil {
-		fmt.Println("Exactly one account / workspace / project — copy these into your .env:")
-		fmt.Println()
-		fmt.Printf("  FRAMEIO_ACCOUNT=%s\n", single.account)
-		fmt.Printf("  FRAMEIO_WORKSPACE=%s\n", single.workspace)
-		fmt.Printf("  FRAMEIO_FOLDER=%s\n", single.folder)
-	} else {
-		fmt.Println("Multiple accounts/workspaces/projects present — pick the one you want and copy:")
-		fmt.Println("  FRAMEIO_ACCOUNT=<id of chosen account>")
-		fmt.Println("  FRAMEIO_WORKSPACE=<id of chosen workspace>")
-		fmt.Println("  FRAMEIO_FOLDER=<root_folder_id of chosen project>")
+	if single == nil {
+		fmt.Println("Multiple accounts/workspaces/projects — set the chosen IDs with:")
+		fmt.Println("  frameio-icloud config set frameio.account   <id>")
+		fmt.Println("  frameio-icloud config set frameio.workspace <id>")
+		fmt.Println("  frameio-icloud config set frameio.folder    <root_folder_id>")
+		return
 	}
-	return nil
+	if !apply {
+		fmt.Println("Exactly one account / workspace / project found. To write into config:")
+		fmt.Println("  frameio-icloud auth -discover -apply")
+		fmt.Printf("\n  frameio.account   = %s\n", single.account)
+		fmt.Printf("  frameio.workspace = %s\n", single.workspace)
+		fmt.Printf("  frameio.folder    = %s\n", single.folder)
+		return
+	}
+	cfg, err := config.Load(p.Config)
+	if err != nil {
+		log.Fatalf("config load: %v", err)
+	}
+	cfg.FrameioAccount = single.account
+	cfg.FrameioWorkspace = single.workspace
+	cfg.FrameioFolder = single.folder
+	if err := config.Save(p.Config, cfg); err != nil {
+		log.Fatalf("config save: %v", err)
+	}
+	fmt.Printf("config updated: %s\n", p.Config)
 }
 
-// selfSignedLoopbackCert mints an ephemeral RSA cert valid for 127.0.0.1,
-// signed by itself. Good enough for Adobe's HTTPS redirect requirement —
-// the browser will warn but let the user proceed, and the cert is thrown
-// away after this process exits.
+// selfSignedLoopbackCert mints an ephemeral RSA cert valid for 127.0.0.1
+// / localhost so the loopback OAuth redirect can use HTTPS (Adobe IMS
+// requires it). Browser warns on first visit; cert is discarded on exit.
 func selfSignedLoopbackCert() (tls.Certificate, error) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -236,7 +233,7 @@ func selfSignedLoopbackCert() (tls.Certificate, error) {
 	}
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "frameio-auth localhost"},
+		Subject:      pkix.Name{CommonName: "frameio-icloud localhost"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,

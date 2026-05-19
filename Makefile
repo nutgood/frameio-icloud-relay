@@ -1,9 +1,16 @@
-.PHONY: build lint vet fmt test docker clean
+.PHONY: build install lint vet fmt test clean
+
+BIN := bin/frameio-icloud
+VERSION ?= $(shell git describe --tags --dirty --always 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
 
 build:
 	mkdir -p bin
-	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/frameio-auth  ./cmd/frameio-auth
-	CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o bin/frameio-relay ./cmd/frameio-relay
+	go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/frameio-icloud
+
+# Convenience: build then install the LaunchAgent on this Mac.
+install: build
+	./$(BIN) install
 
 fmt:
 	gofmt -w cmd internal
@@ -21,9 +28,6 @@ lint: vet
 
 test:
 	go test ./...
-
-docker:
-	docker build -t frameio-immich-relay:latest .
 
 clean:
 	rm -rf bin

@@ -12,11 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-
       - name: Check formatting
         run: |
           unformatted=$(gofmt -l cmd internal)
@@ -25,33 +23,20 @@ jobs:
             echo "$unformatted"
             exit 1
           fi
-
       - name: Go vet
         run: go vet ./...
 
   build:
-    name: Go Build
-    runs-on: ubuntu-latest
+    # Build on macOS since the relay only targets macOS (uses Photos.app
+    # via osascript). Tests that depend on plutil also need macOS.
+    name: Go Build & Test (macOS)
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-
       - name: Build
         run: make build
-
-  test:
-    name: Go Tests
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.23"
-
-      - name: Run tests
+      - name: Test
         run: go test ./...
