@@ -24,19 +24,22 @@ import (
 	"github.com/nutgood/frameio-icloud-relay/internal/paths"
 )
 
+const defaultOAuthScopes = "openid email profile offline_access additional_info.roles"
+const defaultOAuthPort = 12345
+
 // runAuth handles two modes:
 //   - default: interactive OAuth via Adobe IMS. Spins up a localhost HTTPS
-//     listener on :12345, prints the authorize URL, captures the redirect,
-//     exchanges the code, writes tokens.json. Also prints the Frame.io
-//     hierarchy at the end so the user knows what to put in config.
+//     listener, prints the authorize URL, captures the redirect, exchanges
+//     the code, writes tokens.json. Also prints the Frame.io hierarchy at
+//     the end so the user knows what to put in config.
 //   - -discover: skip OAuth, just print the hierarchy using existing
 //     tokens.json. For when you add a new project later.
 func runAuth(args []string) {
 	fs := flag.NewFlagSet("auth", flag.ExitOnError)
 	clientID := fs.String("client-id", os.Getenv("FRAMEIO_CLIENT_ID"), "OAuth client ID from Adobe Developer Console")
 	clientSecret := fs.String("client-secret", os.Getenv("FRAMEIO_CLIENT_SECRET"), "OAuth client secret from Adobe Developer Console")
-	port := fs.Int("port", 12345, "local port for the OAuth redirect listener")
-	scopes := fs.String("scopes", "openid email profile offline_access additional_info.roles", "OAuth scopes")
+	port := fs.Int("port", defaultOAuthPort, "local port for the OAuth redirect listener")
+	scopes := fs.String("scopes", defaultOAuthScopes, "OAuth scopes")
 	discoverOnly := fs.Bool("discover", false, "skip OAuth; just print Frame.io accounts/workspaces/projects")
 	apply := fs.Bool("apply", false, "with -discover and exactly one account/workspace/project, write the IDs into config.json")
 	_ = fs.Parse(args)
@@ -57,23 +60,35 @@ func runAuth(args []string) {
 		log.Fatal("-client-id and -client-secret (or FRAMEIO_CLIENT_ID / FRAMEIO_CLIENT_SECRET) required")
 	}
 
-	redirectURI := fmt.Sprintf("https://localhost:%d/callback", *port)
+	if _, err := performOAuth(p, *clientID, *clientSecret, *port, strings.Fields(*scopes)); err != nil {
+		log.Fatalf("auth failed: %v", err)
+	}
+	fmt.Println()
+	runDiscover(p, *apply)
+}
+
+// performOAuth runs the full IMS authorization-code flow and persists the
+// resulting tokens to p.Tokens. Returns the populated token store on
+// success. Output is printed to stdout (authorize URL, status messages)
+// — callers running inside a TUI should pause/clear before invoking.
+func performOAuth(p *paths.Paths, clientID, clientSecret string, port int, scopes []string) (*frameio.TokenStore, error) {
+	redirectURI := fmt.Sprintf("https://localhost:%d/callback", port)
 	store, err := frameio.LoadTokenStore(p.Tokens)
 	if err != nil {
-		log.Fatalf("load %s: %v", p.Tokens, err)
+		return nil, fmt.Errorf("load %s: %w", p.Tokens, err)
 	}
-	store.ClientID = *clientID
-	store.ClientSecret = *clientSecret
+	store.ClientID = clientID
+	store.ClientSecret = clientSecret
 	store.RedirectURI = redirectURI
 	if err := store.Save(); err != nil {
-		log.Fatalf("save initial store: %v", err)
+		return nil, fmt.Errorf("save initial store: %w", err)
 	}
 
 	stateBytes := make([]byte, 16)
 	_, _ = rand.Read(stateBytes)
 	state := hex.EncodeToString(stateBytes)
+	authURL := store.AuthorizeURL(state, scopes)
 
-	authURL := store.AuthorizeURL(state, strings.Fields(*scopes))
 	fmt.Println("--------------------------------------------------------------------------------")
 	fmt.Println("Open the following URL in your browser and grant access:")
 	fmt.Println()
@@ -123,27 +138,118 @@ func runAuth(args []string) {
 
 	tlsCert, err := selfSignedLoopbackCert()
 	if err != nil {
-		log.Fatalf("self-signed cert: %v", err)
+		return nil, fmt.Errorf("self-signed cert: %w", err)
 	}
 	srv := &http.Server{
-		Addr:              fmt.Sprintf("127.0.0.1:%d", *port),
+		Addr:              fmt.Sprintf("127.0.0.1:%d", port),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{tlsCert}},
 	}
+	listenErr := make(chan error, 1)
 	go func() {
 		if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+			listenErr <- err
 		}
 	}()
-	<-done
+	select {
+	case <-done:
+	case err := <-listenErr:
+		return nil, fmt.Errorf("listen: %w", err)
+	}
 	_ = srv.Close()
 	if flowErr != nil {
-		log.Fatalf("auth failed: %v", flowErr)
+		return nil, flowErr
 	}
-	log.Printf("tokens written to %s (access token expires %s UTC)", p.Tokens, store.ExpiresAt.UTC().Format(time.RFC3339))
-	fmt.Println()
-	runDiscover(p, *apply)
+	fmt.Printf("tokens written to %s (access token expires %s UTC)\n", p.Tokens, store.ExpiresAt.UTC().Format(time.RFC3339))
+	return store, nil
+}
+
+// Hierarchy is the full set of accounts/workspaces/projects reachable
+// from the current token. Used by both the `auth -discover` printout
+// and the setup wizard's account/workspace/project pickers.
+type Hierarchy struct {
+	Accounts []Account
+}
+
+// Account / Workspace / Project mirror the Frame.io types but include
+// the parent chain so the setup wizard can describe each option to the
+// user without re-walking the API.
+type Account struct {
+	ID          string
+	DisplayName string
+	Workspaces  []Workspace
+}
+
+type Workspace struct {
+	ID       string
+	Name     string
+	Projects []Project
+}
+
+type Project struct {
+	ID           string
+	Name         string
+	RootFolderID string
+}
+
+// gatherHierarchy walks every account → workspace → project the token
+// can see. Errors mid-walk are logged but don't abort — the caller still
+// gets whatever is reachable.
+func gatherHierarchy(ctx context.Context, store *frameio.TokenStore) (Hierarchy, error) {
+	client := frameio.NewClient(store, "")
+	rawAccounts, err := client.ListAccounts(ctx)
+	if err != nil {
+		return Hierarchy{}, fmt.Errorf("list accounts: %w", err)
+	}
+	h := Hierarchy{}
+	for _, a := range rawAccounts {
+		acc := Account{ID: a.ID, DisplayName: a.DisplayName}
+		workspaces, err := client.ListWorkspaces(ctx, a.ID)
+		if err != nil {
+			fmt.Printf("    (list workspaces failed for %s: %v)\n", a.ID, err)
+			h.Accounts = append(h.Accounts, acc)
+			continue
+		}
+		for _, w := range workspaces {
+			ws := Workspace{ID: w.ID, Name: w.Name}
+			projects, err := client.ListProjects(ctx, a.ID, w.ID)
+			if err != nil {
+				fmt.Printf("    (list projects failed for %s: %v)\n", w.ID, err)
+				acc.Workspaces = append(acc.Workspaces, ws)
+				continue
+			}
+			for _, prj := range projects {
+				ws.Projects = append(ws.Projects, Project{
+					ID:           prj.ID,
+					Name:         prj.Name,
+					RootFolderID: prj.RootFolderID,
+				})
+			}
+			acc.Workspaces = append(acc.Workspaces, ws)
+		}
+		h.Accounts = append(h.Accounts, acc)
+	}
+	return h, nil
+}
+
+// OnlyTriple returns (accountID, workspaceID, folderID, true) iff the
+// hierarchy has exactly one account, one workspace in it, and one
+// project in that workspace. Used to skip the picker when the choice
+// is unambiguous.
+func (h Hierarchy) OnlyTriple() (string, string, string, bool) {
+	if len(h.Accounts) != 1 {
+		return "", "", "", false
+	}
+	a := h.Accounts[0]
+	if len(a.Workspaces) != 1 {
+		return "", "", "", false
+	}
+	w := a.Workspaces[0]
+	if len(w.Projects) != 1 {
+		return "", "", "", false
+	}
+	return a.ID, w.ID, w.Projects[0].RootFolderID, true
 }
 
 func runDiscover(p *paths.Paths, apply bool) {
@@ -154,44 +260,28 @@ func runDiscover(p *paths.Paths, apply bool) {
 	if store.RefreshToken == "" {
 		log.Fatalf("tokens file %s is empty — run `frameio-icloud auth` first (without -discover)", p.Tokens)
 	}
-	client := frameio.NewClient(store, "")
-	ctx := context.Background()
-	accounts, err := client.ListAccounts(ctx)
+	h, err := gatherHierarchy(context.Background(), store)
 	if err != nil {
-		log.Fatalf("list accounts: %v", err)
+		log.Fatalf("discover: %v", err)
 	}
-	if len(accounts) == 0 {
+	if len(h.Accounts) == 0 {
 		fmt.Println("No Frame.io accounts found for this user.")
 		return
 	}
 	fmt.Println("Discovered Frame.io hierarchy:")
 	fmt.Println()
-	type triple struct{ account, workspace, folder string }
-	var single *triple
-	for _, a := range accounts {
+	for _, a := range h.Accounts {
 		fmt.Printf("  Account: %s\n    id: %s\n", a.DisplayName, a.ID)
-		workspaces, err := client.ListWorkspaces(ctx, a.ID)
-		if err != nil {
-			fmt.Printf("    (list workspaces failed: %v)\n", err)
-			continue
-		}
-		for _, w := range workspaces {
+		for _, w := range a.Workspaces {
 			fmt.Printf("    Workspace: %s\n      id: %s\n", w.Name, w.ID)
-			projects, err := client.ListProjects(ctx, a.ID, w.ID)
-			if err != nil {
-				fmt.Printf("      (list projects failed: %v)\n", err)
-				continue
-			}
-			for _, prj := range projects {
+			for _, prj := range w.Projects {
 				fmt.Printf("      Project: %s\n        id: %s\n        root_folder_id: %s\n", prj.Name, prj.ID, prj.RootFolderID)
-				if len(accounts) == 1 && len(workspaces) == 1 && len(projects) == 1 {
-					single = &triple{a.ID, w.ID, prj.RootFolderID}
-				}
 			}
 		}
 	}
 	fmt.Println()
-	if single == nil {
+	acctID, wsID, folderID, single := h.OnlyTriple()
+	if !single {
 		fmt.Println("Multiple accounts/workspaces/projects — set the chosen IDs with:")
 		fmt.Println("  frameio-icloud config set frameio.account   <id>")
 		fmt.Println("  frameio-icloud config set frameio.workspace <id>")
@@ -201,18 +291,18 @@ func runDiscover(p *paths.Paths, apply bool) {
 	if !apply {
 		fmt.Println("Exactly one account / workspace / project found. To write into config:")
 		fmt.Println("  frameio-icloud auth -discover -apply")
-		fmt.Printf("\n  frameio.account   = %s\n", single.account)
-		fmt.Printf("  frameio.workspace = %s\n", single.workspace)
-		fmt.Printf("  frameio.folder    = %s\n", single.folder)
+		fmt.Printf("\n  frameio.account   = %s\n", acctID)
+		fmt.Printf("  frameio.workspace = %s\n", wsID)
+		fmt.Printf("  frameio.folder    = %s\n", folderID)
 		return
 	}
 	cfg, err := config.Load(p.Config)
 	if err != nil {
 		log.Fatalf("config load: %v", err)
 	}
-	cfg.FrameioAccount = single.account
-	cfg.FrameioWorkspace = single.workspace
-	cfg.FrameioFolder = single.folder
+	cfg.FrameioAccount = acctID
+	cfg.FrameioWorkspace = wsID
+	cfg.FrameioFolder = folderID
 	if err := config.Save(p.Config, cfg); err != nil {
 		log.Fatalf("config save: %v", err)
 	}

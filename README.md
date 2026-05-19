@@ -35,28 +35,32 @@ Fujifilm cameras (X-H2S and friends) can upload natively to Frame.io C2C over Wi
 ## Install
 
 ```sh
-# Build
+# Build the binary.
 make build
 
-# Authenticate against Frame.io (one-time interactive browser flow).
-./bin/frameio-icloud auth -client-id <CLIENT_ID> -client-secret <CLIENT_SECRET>
-
-# (Optional) configure Pushover for notifications.
-./bin/frameio-icloud config set pushover.token <APP_TOKEN>
-./bin/frameio-icloud config set pushover.user_key <USER_KEY>
-
-# (Optional) configure webhook delivery. Without this the relay polls.
-./bin/frameio-icloud config set public_url https://your-tunnel.example.com/webhook
-
-# Install the LaunchAgent — copies the binary to ~/.local/bin and
-# loads sh.leca.frameio-icloud into your gui domain.
-./bin/frameio-icloud install
+# Run the interactive setup wizard — walks you through OAuth,
+# account/workspace/project selection, optional webhook URL, optional
+# Pushover credentials (with an inline test push), the Photos.app
+# permission check, and LaunchAgent install.
+./bin/frameio-icloud setup
 
 # Confirm it's running.
 ./bin/frameio-icloud status
 ```
 
-The first photo to arrive will cause macOS to prompt for **Automation permission** for the binary to drive Photos.app. Approve it. (Subsequent imports are silent.)
+The wizard imports a 1×1 test PNG into Photos.app to force the **Automation permission** prompt early — approve it once and every future import is silent. If you skipped that step, the prompt will fire on the first real upload instead.
+
+### Non-interactive install (advanced)
+
+The wizard is just a UI over the same primitives — every step has a flag-driven equivalent:
+
+```sh
+./bin/frameio-icloud auth -client-id <CLIENT_ID> -client-secret <CLIENT_SECRET>
+./bin/frameio-icloud config set public_url https://your-tunnel.example.com/webhook
+./bin/frameio-icloud config set pushover.token <APP_TOKEN>
+./bin/frameio-icloud config set pushover.user_key <USER_KEY>
+./bin/frameio-icloud install
+```
 
 ## Adobe OAuth setup
 
@@ -72,8 +76,9 @@ The first photo to arrive will cause macOS to prompt for **Automation permission
 ## CLI reference
 
 ```
+frameio-icloud setup           Interactive end-to-end setup wizard.
 frameio-icloud serve           Run the relay (LaunchAgent invokes this).
-frameio-icloud auth            Interactive OAuth login.
+frameio-icloud auth            Non-interactive OAuth login (flags-driven).
 frameio-icloud auth -discover  Print Frame.io account/workspace/project hierarchy.
 frameio-icloud install         Install + start the LaunchAgent.
 frameio-icloud uninstall       Remove the LaunchAgent (keeps config + tokens).

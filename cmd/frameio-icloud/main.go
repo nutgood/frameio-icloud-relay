@@ -18,8 +18,9 @@ Usage:
   frameio-icloud <command> [flags]
 
 Commands:
+  setup            Interactive end-to-end setup wizard (recommended first run).
   serve            Run the relay service. Invoked by the LaunchAgent.
-  auth             Interactive OAuth login (one-time setup).
+  auth             Non-interactive OAuth login (flags-driven; use "setup" instead).
   install          Install + start the LaunchAgent on this Mac.
   uninstall        Stop + remove the LaunchAgent (keeps config + tokens).
   start            Start the LaunchAgent (if installed).
@@ -43,6 +44,8 @@ func main() {
 	cmd := os.Args[1]
 	args := os.Args[2:]
 	switch cmd {
+	case "setup":
+		runSetup(args)
 	case "serve":
 		runServe(args)
 	case "auth":
