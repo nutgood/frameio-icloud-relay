@@ -15,7 +15,7 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/nutgood/frameio-icloud/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
 )
 
 // plistTemplate is the minimum a LaunchAgent needs: an absolute program

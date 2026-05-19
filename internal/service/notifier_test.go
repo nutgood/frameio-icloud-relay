@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nutgood/frameio-icloud/internal/pushover"
+	"github.com/nutgood/frameio-icloud-relay/internal/pushover"
 )
 
 // captureServer is a stand-in Pushover backend that records each message

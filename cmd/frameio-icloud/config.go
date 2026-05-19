@@ -7,8 +7,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/nutgood/frameio-icloud/internal/config"
-	"github.com/nutgood/frameio-icloud/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/config"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
 )
 
 const configUsage = `Usage:

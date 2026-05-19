@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nutgood/frameio-icloud/internal/pushover"
+	"github.com/nutgood/frameio-icloud-relay/internal/pushover"
 )
 
 // notifier coalesces per-file events into "burst" Pushover messages so

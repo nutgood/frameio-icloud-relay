@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nutgood/frameio-icloud/internal/config"
-	"github.com/nutgood/frameio-icloud/internal/frameio"
-	"github.com/nutgood/frameio-icloud/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/config"
+	"github.com/nutgood/frameio-icloud-relay/internal/frameio"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
 )
 
 // runAuth handles two modes:

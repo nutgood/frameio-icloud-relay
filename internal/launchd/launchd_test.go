@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nutgood/frameio-icloud/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
 )
 
 func TestRenderPlist(t *testing.T) {

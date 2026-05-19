@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/nutgood/frameio-icloud/internal/config"
-	"github.com/nutgood/frameio-icloud/internal/frameio"
-	"github.com/nutgood/frameio-icloud/internal/paths"
-	"github.com/nutgood/frameio-icloud/internal/photos"
-	"github.com/nutgood/frameio-icloud/internal/pushover"
-	"github.com/nutgood/frameio-icloud/internal/service"
+	"github.com/nutgood/frameio-icloud-relay/internal/config"
+	"github.com/nutgood/frameio-icloud-relay/internal/frameio"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/photos"
+	"github.com/nutgood/frameio-icloud-relay/internal/pushover"
+	"github.com/nutgood/frameio-icloud-relay/internal/service"
 )
 
 func runServe(args []string) {

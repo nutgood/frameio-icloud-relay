@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/nutgood/frameio-icloud/internal/config"
-	"github.com/nutgood/frameio-icloud/internal/paths"
-	"github.com/nutgood/frameio-icloud/internal/photos"
-	"github.com/nutgood/frameio-icloud/internal/pushover"
+	"github.com/nutgood/frameio-icloud-relay/internal/config"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/photos"
+	"github.com/nutgood/frameio-icloud-relay/internal/pushover"
 )
 
 func runTestPushover(args []string) {

@@ -6,8 +6,8 @@ import (
 	"log"
 	"os"
 
-	"github.com/nutgood/frameio-icloud/internal/launchd"
-	"github.com/nutgood/frameio-icloud/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/launchd"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
 )
 
 func runInstall(args []string) {

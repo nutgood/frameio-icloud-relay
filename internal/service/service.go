@@ -24,11 +24,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nutgood/frameio-icloud/internal/frameio"
-	"github.com/nutgood/frameio-icloud/internal/ipc"
-	"github.com/nutgood/frameio-icloud/internal/paths"
-	"github.com/nutgood/frameio-icloud/internal/photos"
-	"github.com/nutgood/frameio-icloud/internal/pushover"
+	"github.com/nutgood/frameio-icloud-relay/internal/frameio"
+	"github.com/nutgood/frameio-icloud-relay/internal/ipc"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/photos"
+	"github.com/nutgood/frameio-icloud-relay/internal/pushover"
 )
 
 // Options is the runtime configuration for a service. Fully resolved by

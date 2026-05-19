@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/nutgood/frameio-icloud/internal/ipc"
-	"github.com/nutgood/frameio-icloud/internal/launchd"
-	"github.com/nutgood/frameio-icloud/internal/paths"
+	"github.com/nutgood/frameio-icloud-relay/internal/ipc"
+	"github.com/nutgood/frameio-icloud-relay/internal/launchd"
+	"github.com/nutgood/frameio-icloud-relay/internal/paths"
 )
 
 func runStatus(args []string) {
